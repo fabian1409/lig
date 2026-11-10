@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
-use unicode_width::UnicodeWidthStr;
 
 use crate::config::Config;
 use crate::engine::{Engine, Kind, ShellEnv, Suggestion};
@@ -1528,18 +1527,13 @@ impl Session {
             None
         } else {
             let screen = self.parser.screen();
-            let delete = shown[0].delete;
-            let tail: String = {
-                let n = self.line.chars().count();
-                self.line.chars().skip(n.saturating_sub(delete)).collect()
-            };
             // Wrapped rows above the cursor belong to the command too.
             let (crow, _) = screen.cursor_position();
             let mut top = crow;
             while top > 0 && screen.row_wrapped(top - 1) {
                 top -= 1;
             }
-            popup::layout_at(&self.cfg.ui, shown, screen.size(), screen.cursor_position(), top, tail.width() as u16)
+            popup::layout_at(&self.cfg.ui, shown, screen.size(), screen.cursor_position(), top)
         }
     }
 
@@ -1602,10 +1596,6 @@ impl Session {
             if layout.as_ref().is_some_and(|l| l.rect.row < self.known_from()) {
                 layout = None;
             }
-        }
-        // Kept suggestions stay put: their anchor (`delete`) is for the old line.
-        if keep && let (Some(l), Some(old)) = (layout.as_mut(), self.shown) {
-            l.rect.col = old.col.min(self.parser.screen().size().1.saturating_sub(l.rect.width));
         }
         if std::env::var_os("LIG_LOG").is_some() {
             crate::log(&format!(

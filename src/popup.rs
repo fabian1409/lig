@@ -169,8 +169,8 @@ const BOTTOM_DESC_W: u16 = 56;
 const MIN_DESC: u16 = 8;
 
 /// Where the popup goes for this screen/cursor, or `None` if it can't fit.
-pub fn layout(ui: &Ui, items: &[Suggestion], size: (u16, u16), cursor: (u16, u16), token_width: u16) -> Option<Layout> {
-    layout_at(ui, items, size, cursor, cursor.0, token_width)
+pub fn layout(ui: &Ui, items: &[Suggestion], size: (u16, u16), cursor: (u16, u16)) -> Option<Layout> {
+    layout_at(ui, items, size, cursor, cursor.0)
 }
 
 /// Like [`layout`], for input that starts on row `input_top` (a command
@@ -181,7 +181,6 @@ pub fn layout_at(
     (rows, cols): (u16, u16),
     (crow, ccol): (u16, u16),
     input_top: u16,
-    token_width: u16,
 ) -> Option<Layout> {
     if items.is_empty() || rows < 3 || cols < 12 {
         return None;
@@ -258,9 +257,8 @@ pub fn layout_at(
     if height <= chrome_h {
         return None;
     }
-    // Align the suggestion text with the start of the token being completed.
-    let anchor = ccol.saturating_sub(token_width).saturating_sub(b + style.pad_l + icon_w);
-    let col = anchor.min(cols.saturating_sub(width));
+    // The popup's left edge sits at the cursor, so it follows every character typed.
+    let col = ccol.min(cols.saturating_sub(width));
     Some(Layout { rect: Rect { row, col, height, width }, style, icon_w, name_w, desc_w, frame_lines })
 }
 
@@ -429,7 +427,7 @@ pub fn preview(ui: &Ui, cols: u16) -> String {
         s("numpy", Kind::Arg, Some(Icon::Python), "801.6M downloads/month", ""),
     ];
     let prompt = "% git ch";
-    let Some(l) = layout(ui, &items, (40, cols), (0, prompt.width() as u16), 2) else { return String::new() };
+    let Some(l) = layout(ui, &items, (40, cols), (0, prompt.width() as u16)) else { return String::new() };
     let mut out = format!("{prompt}\x1b[7m \x1b[0m\n");
     for line in render(ui, &l, &items, 1, 0) {
         out.push_str(&format!("{}{line}\n", " ".repeat(l.rect.col as usize)));
@@ -505,19 +503,29 @@ mod tests {
     #[test]
     fn placement() {
         let ui = Ui::default();
-        let at = |crow| layout(&ui, &items(20), (24, 80), (crow, 4), 0).unwrap().rect;
+        let at = |crow| layout(&ui, &items(20), (24, 80), (crow, 4)).unwrap().rect;
         assert_eq!((at(2).row, at(2).height), (3, 10));
         assert_eq!((at(16).row, at(16).height), (17, 7));
         assert_eq!((at(23).row, at(23).height), (13, 10));
         let ui = Ui { border: "none".into(), ..Ui::default() };
-        let r = layout(&ui, &items(20), (24, 80), (2, 4), 0).unwrap().rect;
+        let r = layout(&ui, &items(20), (24, 80), (2, 4)).unwrap().rect;
         assert_eq!(r.height, 8);
+    }
+
+    #[test]
+    fn follows_the_cursor() {
+        let ui = Ui::default();
+        let col = |c| layout(&ui, &items(20), (24, 80), (2, c)).unwrap().rect.col;
+        assert_eq!((col(10), col(11), col(30)), (10, 11, 30));
+        // Shifted left only as far as needed to stay on screen.
+        let l = layout(&ui, &items(20), (24, 80), (2, 79)).unwrap().rect;
+        assert_eq!(l.col + l.width, 80);
     }
 
     #[test]
     fn above_a_wrapped_command() {
         let ui = Ui::default();
-        let r = layout_at(&ui, &items(20), (24, 80), (23, 4), 21, 0).unwrap().rect;
+        let r = layout_at(&ui, &items(20), (24, 80), (23, 4), 21).unwrap().rect;
         assert_eq!(r.row + r.height, 21);
     }
 
@@ -525,12 +533,12 @@ mod tests {
     fn rounded_border_and_counter() {
         let ui = Ui { icons: "none".into(), ..Ui::default() };
         let it = items(20);
-        let l = layout(&ui, &it, (24, 80), (2, 10), 0).unwrap();
+        let l = layout(&ui, &it, (24, 80), (2, 10)).unwrap();
         let lines: Vec<String> = render(&ui, &l, &it, 2, 0).iter().map(|s| strip(s)).collect();
         assert!(lines[0].starts_with('╭') && lines[0].ends_with('╮'));
         assert!(lines[1].starts_with("│  item0") && lines[1].contains("description 0"));
         let rui = Ui { icons: "none".into(), density: "relaxed".into(), ..Ui::default() };
-        let rl = layout(&rui, &it, (24, 80), (2, 10), 0).unwrap();
+        let rl = layout(&rui, &it, (24, 80), (2, 10)).unwrap();
         let relaxed: Vec<String> = render(&rui, &rl, &it, 0, 0).iter().map(|s| strip(s)).collect();
         assert_eq!(relaxed[1].trim_matches(['│', ' ']), "");
         assert!(relaxed[2].starts_with("│   item0      "));
@@ -547,7 +555,7 @@ mod tests {
             ("none", "normal"),
         ] {
             let ui = Ui { border: border.into(), density: density.into(), ..Ui::default() };
-            let l = layout(&ui, &it, (24, 80), (2, 10), 0).unwrap();
+            let l = layout(&ui, &it, (24, 80), (2, 10)).unwrap();
             for line in render(&ui, &l, &it, 0, 0) {
                 assert_eq!(strip(&line).width(), l.rect.width as usize, "{border}/{density}: {line:?}");
             }
@@ -560,25 +568,25 @@ mod tests {
         let it = items(20);
         let base = Ui { icons: "none".into(), ..Ui::default() };
         let ui = Ui { width: Size::Cells(70), ..base.clone() };
-        let l = layout(&ui, &it, (24, 100), (2, 10), 0).unwrap();
+        let l = layout(&ui, &it, (24, 100), (2, 10)).unwrap();
         assert_eq!(l.rect.width, 70);
         assert!(render(&ui, &l, &it, 0, 0).iter().all(|r| strip(r).width() == 70));
         let ui = Ui { width: Size::Text("50%".into()), ..base.clone() };
-        assert_eq!(layout(&ui, &it, (24, 120), (2, 10), 0).unwrap().rect.width, 60);
+        assert_eq!(layout(&ui, &it, (24, 120), (2, 10)).unwrap().rect.width, 60);
         let ui = Ui { width: Size::Cells(20), ..base.clone() };
-        let l = layout(&ui, &it, (24, 100), (2, 10), 0).unwrap();
+        let l = layout(&ui, &it, (24, 100), (2, 10)).unwrap();
         assert!(strip(&render(&ui, &l, &it, 0, 0)[1]).contains("item0") && l.desc_w == 0);
         let ui = Ui { min_width: 60, ..base.clone() };
-        assert_eq!(layout(&ui, &it, (24, 100), (2, 10), 0).unwrap().rect.width, 60);
+        assert_eq!(layout(&ui, &it, (24, 100), (2, 10)).unwrap().rect.width, 60);
         let ui = Ui { max_width: Size::Text("25%".into()), ..base.clone() };
-        assert_eq!(layout(&ui, &it, (24, 100), (2, 10), 0).unwrap().rect.width, 25);
+        assert_eq!(layout(&ui, &it, (24, 100), (2, 10)).unwrap().rect.width, 25);
         let ui = Ui { height: Size::Cells(4), ..base.clone() };
-        assert_eq!(layout(&ui, &it, (40, 100), (2, 10), 0).unwrap().visible(), 4);
+        assert_eq!(layout(&ui, &it, (40, 100), (2, 10)).unwrap().visible(), 4);
         let ui = Ui { height: Size::Text("50%".into()), ..base.clone() };
-        assert_eq!(layout(&ui, &it, (40, 100), (2, 10), 0).unwrap().rect.height, 20);
+        assert_eq!(layout(&ui, &it, (40, 100), (2, 10)).unwrap().rect.height, 20);
         let ui = Ui { min_height: 6, ..base.clone() };
         let few = items(2);
-        let l = layout(&ui, &few, (40, 100), (2, 10), 0).unwrap();
+        let l = layout(&ui, &few, (40, 100), (2, 10)).unwrap();
         assert_eq!(l.visible(), 6);
         assert_eq!(render(&ui, &l, &few, 0, 0).len(), 8);
     }
@@ -590,7 +598,7 @@ mod tests {
             creating a new commit for each one"
             .into();
         let ui = Ui { icons: "none".into(), description_position: "bottom".into(), ..Ui::default() };
-        let l = layout(&ui, &it, (24, 100), (2, 10), 0).unwrap();
+        let l = layout(&ui, &it, (24, 100), (2, 10)).unwrap();
         assert_eq!(l.desc_w, 0);
         assert_eq!(l.frame_lines, 2);
         assert_eq!(l.visible(), 5);
@@ -603,7 +611,7 @@ mod tests {
         assert!(lines[7].starts_with('╭') && lines[8].contains("Apply the changes"));
         assert!(lines.last().unwrap().starts_with('╰'));
         let ui = Ui { border: "none".into(), ..ui };
-        let l = layout(&ui, &it, (24, 100), (2, 10), 0).unwrap();
+        let l = layout(&ui, &it, (24, 100), (2, 10)).unwrap();
         let lines: Vec<String> = render(&ui, &l, &it, 0, 0).iter().map(|s| strip(s)).collect();
         assert!(lines[5].starts_with('─') && lines[6].contains("description 0"));
     }
