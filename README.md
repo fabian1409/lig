@@ -139,6 +139,7 @@ theme = "default"          # catppuccin, nord, dracula, gruvbox, tokyonight, lig
 border = "rounded"         # square, none
 icons = "auto"             # nerd, unicode, none
 height = 8                 # max rows, or "30%"
+description_position = "right"   # or "bottom": a frame under the list, "side": a box beside it
 
 [keys]                     # `lig keys` shows any key's name
 accept = ["enter"]

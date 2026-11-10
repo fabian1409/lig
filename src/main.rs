@@ -161,7 +161,7 @@ struct PreviewArgs {
     /// rows (8) or percent ("30%")
     #[arg(long)]
     height: Option<String>,
-    /// right or bottom
+    /// right, bottom or side
     #[arg(long)]
     description: Option<String>,
     /// Show every theme

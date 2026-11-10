@@ -79,9 +79,10 @@ pub struct Ui {
     /// Show descriptions.
     pub descriptions: bool,
     /// `"right"`: a column next to each name; `"bottom"`: the selected
-    /// item's full description in a frame under the list.
+    /// item's full description in a frame under the list; `"side"`: in a
+    /// box beside the list.
     pub description_position: String,
-    /// Lines of the bottom description frame (at most).
+    /// Lines of the bottom or side description box (at most).
     pub description_lines: u16,
     /// `"auto"` (Nerd Font glyphs when the terminal/fonts have them),
     /// `"nerd"`, `"unicode"` or `"none"`.

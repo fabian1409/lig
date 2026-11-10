@@ -56,9 +56,29 @@ pub struct Layout {
     desc_w: u16,
     /// Text lines of the bottom description frame (0: none).
     frame_lines: u16,
+    /// The box beside the list with the selected item's description (`description_position = "side"`).
+    pub side: Option<Rect>,
 }
 
 impl Layout {
+    /// Show the side box only while the selected item has a description.
+    pub fn for_selected(mut self, item: Option<&Suggestion>) -> Self {
+        if item.is_none_or(|s| s.description.is_empty()) {
+            self.side = None;
+        }
+        self
+    }
+
+    /// Everything the popup covers: the list and the side box.
+    pub fn bounds(&self) -> Rect {
+        let Some(s) = self.side else { return self.rect };
+        let r = self.rect;
+        let col = r.col.min(s.col);
+        let end = (r.col + r.width).max(s.col + s.width);
+        let (row, bottom) = (r.row.min(s.row), (r.row + r.height).max(s.row + s.height));
+        Rect { row, col, height: bottom - row, width: end - col }
+    }
+
     fn border_w(&self) -> u16 {
         u16::from(self.style.border.is_some())
     }
@@ -167,6 +187,9 @@ const MIN_BELOW: u16 = 4;
 const BOTTOM_DESC_W: u16 = 56;
 /// A description column narrower than this isn't worth showing.
 const MIN_DESC: u16 = 8;
+/// Preferred and smallest text width of the side description box.
+const SIDE_DESC_W: u16 = 40;
+const MIN_SIDE_DESC: u16 = 16;
 
 /// Where the popup goes for this screen/cursor, or `None` if it can't fit.
 pub fn layout(ui: &Ui, items: &[Suggestion], size: (u16, u16), cursor: (u16, u16)) -> Option<Layout> {
@@ -200,8 +223,9 @@ pub fn layout_at(
     let chrome_w = 2 * b + style.pad_l + style.pad_r + icon_w + bar;
     let name_need = (items.iter().map(|s| s.label.width()).max().unwrap_or(1) as u16).clamp(4, 44);
     let bottom = ui.descriptions && ui.description_position == "bottom";
+    let side = ui.descriptions && ui.description_position == "side";
     let longest_desc = items.iter().map(|s| s.description.width()).max().unwrap_or(0) as u16;
-    let desc_need = if ui.descriptions && !bottom { longest_desc.min(style.desc_max) } else { 0 };
+    let desc_need = if ui.descriptions && !bottom && !side { longest_desc.min(style.desc_max) } else { 0 };
 
     // Width: fixed, or fit to the content within `min_width..=max_width`.
     let smallest = (chrome_w + 4).min(cols);
@@ -212,6 +236,8 @@ pub fn layout_at(
     }
     let width = match ui.width.resolve(cols) {
         Some(w) => w,
+        // The side box sits right next to the names: no padding up to `min_width`.
+        None if side => content_w.min(max_w),
         None => content_w.clamp(ui.min_width.min(max_w), max_w),
     }
     .clamp(smallest, cols);
@@ -259,7 +285,73 @@ pub fn layout_at(
     }
     // The popup's left edge sits at the cursor, so it follows every character typed.
     let col = ccol.min(cols.saturating_sub(width));
-    Some(Layout { rect: Rect { row, col, height, width }, style, icon_w, name_w, desc_w, frame_lines })
+    let rect = Rect { row, col, height, width };
+    let side = if side { side_box(ui, items, cols, rect, b, style.pad_v) } else { None };
+    Some(Layout { rect, style, icon_w, name_w, desc_w, frame_lines, side })
+}
+
+/// The side description box: right of the list, else left of it, within the list's rows. It's padded
+/// like the list (`pad_v` blank rows inside), so its text lines up with the first suggestion.
+fn side_box(ui: &Ui, items: &[Suggestion], cols: u16, list: Rect, b: u16, pad_v: u16) -> Option<Rect> {
+    let longest = items.iter().map(|s| s.description.width()).max().unwrap_or(0) as u16;
+    if longest == 0 {
+        return None;
+    }
+    let chrome = 2 * b + 2;
+    // Framed boxes get a column between them; without a frame the scrollbar column separates them.
+    let gap = b;
+    let want = longest.min(SIDE_DESC_W);
+    let right = cols.saturating_sub(list.col + list.width + gap).saturating_sub(chrome).min(want);
+    let left = list.col.saturating_sub(gap).saturating_sub(chrome).min(want);
+    let (text_w, on_right) = if right >= want.min(MIN_SIDE_DESC) {
+        (right, true)
+    } else if left >= want.min(MIN_SIDE_DESC) {
+        (left, false)
+    } else {
+        return None;
+    };
+    let wrapped: Vec<Vec<String>> = items.iter().map(|s| wrap(&s.description, text_w as usize)).collect();
+    let needed = wrapped.iter().map(Vec::len).max().unwrap_or(0) as u16;
+    // As wide as the widest wrapped line, so short descriptions get a snug box.
+    let text_w = wrapped.iter().flatten().map(|l| l.width()).max().unwrap_or(1).max(1) as u16;
+    let lines = needed.min(ui.description_lines).min(list.height.saturating_sub(2 * (b + pad_v))).max(1);
+    let width = text_w + chrome;
+    let col = if on_right { list.col + list.width + gap } else { list.col - gap - width };
+    Some(Rect { row: list.row, col, height: lines + 2 * (b + pad_v), width })
+}
+
+/// The side box as lines of text with SGR codes, each exactly `side.width` wide.
+pub fn render_side(ui: &Ui, l: &Layout, item: Option<&Suggestion>) -> Vec<String> {
+    let Some(side) = l.side else { return vec![] };
+    let t: Theme = theme::resolve(ui);
+    let b = l.border_w();
+    let w = side.width as usize;
+    let text_w = w - 2 * b as usize - 2;
+    let edge = format!("\x1b[0;{};{}m", t.border_bg, t.border_fg);
+    let pad_v = l.style.pad_v;
+    let n = (side.height - 2 * (b + pad_v)) as usize;
+    let desc = item.map_or("", |s| s.description.as_str());
+    let (text, style) = (frame_text(desc, text_w, n), &t.desc_fg);
+    let mut out = vec![];
+    let bd = l.style.border;
+    if let Some(bd) = bd {
+        out.push(format!("{edge}{}{}{}\x1b[0m", bd[0], bd[4].repeat(w - 2), bd[1]));
+    }
+    let row = |text: &str| {
+        let body = format!("\x1b[0;{};{style}m {} ", t.bg, fit(text, text_w));
+        match bd {
+            Some(bd) => format!("{edge}{}{body}{edge}{}\x1b[0m", bd[5], bd[5]),
+            None => format!("{body}\x1b[0m"),
+        }
+    };
+    let blank = (0..pad_v).map(|_| row(""));
+    out.extend(blank.clone());
+    out.extend(text.iter().map(|line| row(line)));
+    out.extend(blank);
+    if let Some(bd) = bd {
+        out.push(format!("{edge}{}{}{}\x1b[0m", bd[2], bd[4].repeat(w - 2), bd[3]));
+    }
+    out
 }
 
 /// The popup as lines of text with SGR codes, each exactly `rect.width` wide.
@@ -428,9 +520,33 @@ pub fn preview(ui: &Ui, cols: u16) -> String {
     ];
     let prompt = "% git ch";
     let Some(l) = layout(ui, &items, (40, cols), (0, prompt.width() as u16)) else { return String::new() };
+    let l = l.for_selected(items.get(1));
     let mut out = format!("{prompt}\x1b[7m \x1b[0m\n");
-    for line in render(ui, &l, &items, 1, 0) {
-        out.push_str(&format!("{}{line}\n", " ".repeat(l.rect.col as usize)));
+    let list = render(ui, &l, &items, 1, 0);
+    let side = render_side(ui, &l, items.get(1));
+    let top = l.bounds().row;
+    let at_row = |lines: &[String], rect: Rect, i: usize| {
+        i.checked_sub(usize::from(rect.row - top)).and_then(|j| lines.get(j).cloned())
+    };
+    for i in 0..l.bounds().height as usize {
+        // Both boxes on one row, left to right, with blanks between and around them.
+        let mut parts: Vec<(u16, u16, String)> = vec![];
+        if let Some(line) = at_row(&list, l.rect, i) {
+            parts.push((l.rect.col, l.rect.width, line));
+        }
+        if let Some(s) = l.side
+            && let Some(line) = at_row(&side, s, i)
+        {
+            parts.push((s.col, s.width, line));
+        }
+        parts.sort_by_key(|p| p.0);
+        let mut at = 0;
+        for (col, width, line) in parts {
+            out.push_str(&" ".repeat(usize::from(col - at)));
+            out.push_str(&line);
+            at = col + width;
+        }
+        out.push('\n');
     }
     out
 }
@@ -439,6 +555,11 @@ pub fn draw(out: &mut Vec<u8>, ui: &Ui, l: &Layout, items: &[Suggestion], select
     let r = l.rect;
     for (i, line) in render(ui, l, items, selected, scroll).iter().enumerate() {
         let _ = write!(out, "\x1b[{};{}H{line}", r.row as usize + i + 1, r.col + 1);
+    }
+    if let Some(s) = l.side {
+        for (i, line) in render_side(ui, l, items.get(selected)).iter().enumerate() {
+            let _ = write!(out, "\x1b[{};{}H{line}", s.row as usize + i + 1, s.col + 1);
+        }
     }
 }
 
@@ -510,6 +631,53 @@ mod tests {
         let ui = Ui { border: "none".into(), ..Ui::default() };
         let r = layout(&ui, &items(20), (24, 80), (2, 4)).unwrap().rect;
         assert_eq!(r.height, 8);
+    }
+
+    #[test]
+    fn side_description_box() {
+        let ui = Ui { description_position: "side".into(), ..Ui::default() };
+        let mut it = items(5);
+        it[1].description = "Add file contents to the staging area and much more".into();
+        let l = layout(&ui, &it, (24, 100), (2, 10)).unwrap();
+        let s = l.side.unwrap();
+        assert_eq!((l.desc_w, s.row, s.col), (0, l.rect.row, l.rect.col + l.rect.width + 1));
+        // Hugs the names despite `min_width`.
+        let wide = Ui { min_width: 60, ..ui.clone() };
+        assert_eq!(layout(&wide, &it, (24, 100), (2, 10)).unwrap().rect.width, l.rect.width);
+        // Borderless: right after the scrollbar column.
+        let flat = Ui { border: "none".into(), ..ui.clone() };
+        let f = layout(&flat, &it, (24, 100), (2, 10)).unwrap();
+        assert_eq!(f.side.unwrap().col, f.rect.col + f.rect.width);
+        // Hidden while the selected item has no description.
+        assert!(layout(&ui, &it, (24, 100), (2, 10)).unwrap().for_selected(it.get(1)).side.is_some());
+        let mut none = it.clone();
+        none[1].description.clear();
+        assert!(layout(&ui, &none, (24, 100), (2, 10)).unwrap().for_selected(none.get(1)).side.is_none());
+        assert!(s.height <= l.rect.height);
+        assert_eq!(l.bounds().width, l.rect.width + 1 + s.width);
+        let lines: Vec<String> = render_side(&ui, &l, it.get(1)).iter().map(|x| strip(x)).collect();
+        assert!(lines[1].contains("Add file contents"));
+        for line in &lines {
+            assert_eq!(line.width(), s.width as usize, "{line:?}");
+        }
+        // Relaxed: padded inside like the list, so the text is level with the first suggestion.
+        let relaxed = Ui { density: "relaxed".into(), ..ui.clone() };
+        let r = layout(&relaxed, &it, (24, 100), (2, 10)).unwrap();
+        let rs = r.side.unwrap();
+        assert_eq!(rs.row, r.rect.row);
+        assert_eq!(r.bounds().height, r.rect.height);
+        let lines: Vec<String> = render_side(&relaxed, &r, it.get(1)).iter().map(|x| strip(x)).collect();
+        assert_eq!(lines.len(), rs.height as usize);
+        assert_eq!(lines[1].trim_matches(['│', ' ']), "");
+        assert!(lines[2].contains("Add file contents"));
+        // No room on the right: it goes left of the list.
+        let l = layout(&ui, &it, (24, 100), (2, 80)).unwrap();
+        let s = l.side.unwrap();
+        assert_eq!(s.col + s.width + 1, l.rect.col);
+        // No descriptions at all: no box.
+        let bare: Vec<Suggestion> =
+            items(3).into_iter().map(|s| Suggestion { description: String::new(), ..s }).collect();
+        assert!(layout(&ui, &bare, (24, 100), (2, 10)).unwrap().side.is_none());
     }
 
     #[test]

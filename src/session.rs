@@ -1534,6 +1534,7 @@ impl Session {
                 top -= 1;
             }
             popup::layout_at(&self.cfg.ui, shown, screen.size(), screen.cursor_position(), top)
+                .map(|l| l.for_selected(shown.get(self.selected)))
         }
     }
 
@@ -1608,13 +1609,13 @@ impl Session {
                 self.parser.screen().alternate_screen(),
                 self.parser.screen().cursor_position(),
                 self.parser.screen().size(),
-                layout.as_ref().map(|l| l.rect)
+                layout.as_ref().map(|l| l.bounds())
             ));
         }
         // Stays set across the brief erase/redraw around shell output.
-        self.shown = layout.as_ref().filter(|_| !is_message).map(|l| l.rect);
+        self.shown = layout.as_ref().filter(|_| !is_message).map(|l| l.bounds());
         match (&layout, self.drawn) {
-            (Some(l), Some(old)) if l.rect == old => {}
+            (Some(l), Some(old)) if l.bounds() == old => {}
             _ => self.erase(&mut w),
         }
         if let Some(l) = layout {
@@ -1629,7 +1630,7 @@ impl Session {
             let (selected, scroll) = if is_message { (usize::MAX, 0) } else { (self.selected, self.scroll) };
             popup::draw(&mut w, &self.cfg.ui, &l, &shown, selected, scroll);
             popup::restore_cursor(&mut w, self.parser.screen());
-            self.drawn = Some(l.rect);
+            self.drawn = Some(l.bounds());
         }
         self.end_sync(&mut w);
         self.write_out(&w);
