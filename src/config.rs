@@ -208,6 +208,8 @@ pub struct Behavior {
     pub files_first_commands: Vec<String>,
     /// Show suggestions right after a space (empty current token).
     pub show_on_empty_token: bool,
+    /// "↵ Enter" (run the command) and "Back" (one folder up) above the folders of `cd` & co.
+    pub folder_navigation: bool,
     /// Pop up automatically for the first word (command names). Off by default so short
     /// commands run with one Enter; the toggle key (Ctrl+Space) always shows them.
     pub complete_commands: bool,
@@ -286,6 +288,7 @@ impl Default for Behavior {
             files_first: false,
             files_first_commands: FILES_FIRST_COMMANDS.iter().map(|c| c.to_string()).collect(),
             show_on_empty_token: true,
+            folder_navigation: true,
             complete_commands: false,
             online: true,
             generator_timeout_ms: 5000,

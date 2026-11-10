@@ -597,7 +597,7 @@ impl Engine {
     }
 
     fn files(&mut self, cx: &mut Cx<'_>, folders_only: bool) {
-        if folders_only && cx.only_paths {
+        if folders_only && cx.only_paths && self.cfg.folder_navigation {
             folder_navigation(cx);
         }
         let cl = cx.cl;
@@ -1490,6 +1490,18 @@ mod tests {
 
     // POSIX paths and quoting; Windows has its own tests.
     #[cfg(unix)]
+    #[test]
+    fn folder_navigation_can_be_turned_off() {
+        let (mut e, env) = engine();
+        e.cfg.folder_navigation = false;
+        e.insert_spec(cmd("go-to", "").arg(arg("dir").folders()));
+        for line in ["go-to ", "go-to sub\\ dir/"] {
+            let c = e.complete(line, &env, true, false);
+            assert!(c.items.iter().all(|s| !matches!(s.kind, Kind::Execute | Kind::Back)), "{line}");
+        }
+        assert_eq!(e.complete("go-to ", &env, true, false).items[0].label, "sub dir/");
+    }
+
     #[test]
     fn parent_paths() {
         assert_eq!(parent_path("src/app/").as_deref(), Some("src/"));

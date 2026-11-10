@@ -151,6 +151,7 @@ enter_accepts = "auto"     # "always", "after-space", "never"
 complete_commands = false  # pop up for command names too
 online = true              # search package registries as you type
 disabled_commands = []     # never show the popup for these
+folder_navigation = true   # "↵ Enter" and "Back" above the folders of cd, mkdir…
 ```
 
 Try styles without editing anything: `lig preview --all`, `lig preview --theme nord`,
